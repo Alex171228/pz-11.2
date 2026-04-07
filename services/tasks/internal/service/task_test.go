@@ -1,8 +1,12 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"testing"
+	"time"
+
+	"go.uber.org/zap"
 )
 
 type mockRepo struct {
@@ -60,9 +64,14 @@ func (m *mockRepo) SearchByTitle(title string) ([]*Task, error) {
 	return result, nil
 }
 
+func newTestService(repo *mockRepo) *TaskService {
+	log, _ := zap.NewDevelopment()
+	return NewTaskService(repo, nil, log, 120*time.Second, 30*time.Second)
+}
+
 func TestCreate(t *testing.T) {
 	repo := newMockRepo()
-	svc := NewTaskService(repo)
+	svc := newTestService(repo)
 
 	task, err := svc.Create(CreateTaskRequest{
 		Title:       "Test Task",
@@ -88,7 +97,7 @@ func TestCreate(t *testing.T) {
 
 func TestGetAll(t *testing.T) {
 	repo := newMockRepo()
-	svc := NewTaskService(repo)
+	svc := newTestService(repo)
 
 	svc.Create(CreateTaskRequest{Title: "Task 1"})
 	svc.Create(CreateTaskRequest{Title: "Task 2"})
@@ -104,11 +113,11 @@ func TestGetAll(t *testing.T) {
 
 func TestGetByID(t *testing.T) {
 	repo := newMockRepo()
-	svc := NewTaskService(repo)
+	svc := newTestService(repo)
 
 	created, _ := svc.Create(CreateTaskRequest{Title: "Find Me"})
 
-	found, err := svc.GetByID(created.ID)
+	found, err := svc.GetByID(context.Background(), created.ID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -119,9 +128,9 @@ func TestGetByID(t *testing.T) {
 
 func TestGetByID_NotFound(t *testing.T) {
 	repo := newMockRepo()
-	svc := NewTaskService(repo)
+	svc := newTestService(repo)
 
-	_, err := svc.GetByID("nonexistent")
+	_, err := svc.GetByID(context.Background(), "nonexistent")
 	if !errors.Is(err, ErrTaskNotFound) {
 		t.Errorf("expected ErrTaskNotFound, got %v", err)
 	}
@@ -129,13 +138,13 @@ func TestGetByID_NotFound(t *testing.T) {
 
 func TestUpdate(t *testing.T) {
 	repo := newMockRepo()
-	svc := NewTaskService(repo)
+	svc := newTestService(repo)
 
 	created, _ := svc.Create(CreateTaskRequest{Title: "Original"})
 
 	newTitle := "Updated"
 	done := true
-	updated, err := svc.Update(created.ID, UpdateTaskRequest{
+	updated, err := svc.Update(context.Background(), created.ID, UpdateTaskRequest{
 		Title: &newTitle,
 		Done:  &done,
 	})
@@ -152,10 +161,10 @@ func TestUpdate(t *testing.T) {
 
 func TestUpdate_NotFound(t *testing.T) {
 	repo := newMockRepo()
-	svc := NewTaskService(repo)
+	svc := newTestService(repo)
 
 	newTitle := "X"
-	_, err := svc.Update("nonexistent", UpdateTaskRequest{Title: &newTitle})
+	_, err := svc.Update(context.Background(), "nonexistent", UpdateTaskRequest{Title: &newTitle})
 	if !errors.Is(err, ErrTaskNotFound) {
 		t.Errorf("expected ErrTaskNotFound, got %v", err)
 	}
@@ -163,11 +172,11 @@ func TestUpdate_NotFound(t *testing.T) {
 
 func TestDelete(t *testing.T) {
 	repo := newMockRepo()
-	svc := NewTaskService(repo)
+	svc := newTestService(repo)
 
 	created, _ := svc.Create(CreateTaskRequest{Title: "Delete Me"})
 
-	err := svc.Delete(created.ID)
+	err := svc.Delete(context.Background(), created.ID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -178,9 +187,9 @@ func TestDelete(t *testing.T) {
 
 func TestDelete_NotFound(t *testing.T) {
 	repo := newMockRepo()
-	svc := NewTaskService(repo)
+	svc := newTestService(repo)
 
-	err := svc.Delete("nonexistent")
+	err := svc.Delete(context.Background(), "nonexistent")
 	if !errors.Is(err, ErrTaskNotFound) {
 		t.Errorf("expected ErrTaskNotFound, got %v", err)
 	}
@@ -188,7 +197,7 @@ func TestDelete_NotFound(t *testing.T) {
 
 func TestSearchByTitle(t *testing.T) {
 	repo := newMockRepo()
-	svc := NewTaskService(repo)
+	svc := newTestService(repo)
 
 	svc.Create(CreateTaskRequest{Title: "Alpha"})
 	svc.Create(CreateTaskRequest{Title: "Beta"})
@@ -205,7 +214,7 @@ func TestSearchByTitle(t *testing.T) {
 
 func TestUpdate_PartialFields(t *testing.T) {
 	repo := newMockRepo()
-	svc := NewTaskService(repo)
+	svc := newTestService(repo)
 
 	created, _ := svc.Create(CreateTaskRequest{
 		Title:       "Original",
@@ -214,7 +223,7 @@ func TestUpdate_PartialFields(t *testing.T) {
 	})
 
 	newDesc := "New Desc"
-	updated, err := svc.Update(created.ID, UpdateTaskRequest{Description: &newDesc})
+	updated, err := svc.Update(context.Background(), created.ID, UpdateTaskRequest{Description: &newDesc})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

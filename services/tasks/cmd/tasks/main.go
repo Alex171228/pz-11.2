@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
+	"pz1.2/services/tasks/internal/cache"
 	"pz1.2/services/tasks/internal/client/authclient"
 	taskshttp "pz1.2/services/tasks/internal/http"
 	"pz1.2/services/tasks/internal/repository"
@@ -69,7 +71,35 @@ func main() {
 		authVerifier = authclient.NewHTTPClient(authBaseURL, 3*time.Second, log)
 	}
 
-	taskService := service.NewTaskService(repo)
+	redisAddr := os.Getenv("REDIS_ADDR")
+	if redisAddr == "" {
+		redisAddr = "localhost:6379"
+	}
+
+	cacheTTL := 120 * time.Second
+	if v := os.Getenv("CACHE_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cacheTTL = d
+		}
+	}
+
+	cacheTTLJitter := 30 * time.Second
+	if v := os.Getenv("CACHE_TTL_JITTER"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cacheTTLJitter = d
+		}
+	}
+
+	var redisClient *redis.Client
+	redisClient = cache.NewRedisClient(redisAddr, "", 2*time.Second, 2*time.Second, 2*time.Second)
+	if err := cache.Ping(context.Background(), redisClient); err != nil {
+		log.Warn("redis unavailable at startup, caching disabled", zap.Error(err))
+		redisClient = nil
+	} else {
+		log.Info("connected to redis", zap.String("addr", redisAddr))
+	}
+
+	taskService := service.NewTaskService(repo, redisClient, log, cacheTTL, cacheTTLJitter)
 
 	mux := http.NewServeMux()
 	handler := taskshttp.NewHandler(taskService, authVerifier, log)

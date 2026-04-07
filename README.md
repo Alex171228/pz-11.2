@@ -1,221 +1,274 @@
-# Практическое задание 8
+# Практическое задание 9
 ## Шишков А.Д. ЭФМО-02-22
 ## Тема
-Настройка GitHub Actions для сборки приложения.
+Внедрение распределённого кэша (Redis).
 
 ## Цель
-Освоить основы CI/CD для backend-проекта на Go, настроить автоматический pipeline для запуска тестов, сборки и упаковки Docker-образа.
+Освоить внедрение распределённого кэша в backend-приложение на Go с реализацией стратегии cache-aside, корректного TTL, jitter и устойчивости сервиса при недоступности Redis.
 
 ---
 
-## 1. Что такое CI и CD
+## 1. Зачем backend-приложению кэширование
 
-**CI (Continuous Integration)** — непрерывная интеграция. После каждого коммита система автоматически:
-- устанавливает зависимости;
-- запускает тесты;
-- выполняет сборку;
-- проверяет, что изменения не сломали проект.
+Серверное приложение получает данные по запросам на чтение, обращаясь к базе данных. Если запросов много, а одни и те же записи читаются повторно, БД становится узким местом. Кэш — промежуточное хранилище уже полученных результатов, которое:
 
-**CD (Continuous Delivery / Deployment)** — непрерывная доставка. После успешной CI автоматически:
-- собирается Docker-образ;
-- публикуется в registry;
-- (опционально) разворачивается на сервере.
+- **ускоряет ответ** — чтение из Redis на порядок быстрее, чем из PostgreSQL;
+- **снижает нагрузку на БД** — повторные запросы не доходят до базы;
+- **не заменяет БД** — кэш временный, данные могут истечь или быть удалены.
 
-CI отвечает за качество кода, CD — за доставку результата.
+Redis подходит для этой роли как быстрый in-memory key-value store с поддержкой TTL и атомарных операций.
 
 ---
 
-## 2. Структура pipeline
+## 2. Что такое cache-aside
 
-Pipeline состоит из двух job, выполняемых последовательно:
+Cache-aside — стратегия кэширования, при которой приложение само управляет кэшем:
 
 ```
-push/PR в main
-    │
-    ▼
-┌──────────────────┐
-│  test-and-build  │
-│                  │
-│  1. Checkout     │
-│  2. Setup Go     │
-│  3. Dependencies │
-│  4. go test      │
-│  5. go build     │
-└────────┬─────────┘
-         │ (только при успехе)
-         ▼
-┌──────────────────┐
-│  docker-build    │
-│                  │
-│  1. Checkout     │
-│  2. Buildx       │
-│  3. docker build │
-└──────────────────┘
+GET /v1/tasks/{id}
+        │
+        ▼
+┌─── Redis GET ───┐
+│                 │
+│  hit?           │
+│  ├─ да → ответ  │
+│  └─ нет ────────┼──► БД → ответ
+│                 │       │
+│                 │   Redis SET (TTL)
+└─────────────────┘
 ```
 
-**test-and-build** — проверяет код: скачивает зависимости, запускает unit-тесты, компилирует оба сервиса (tasks и auth).
+1. Приложение проверяет ключ в Redis
+2. **Cache hit** — данные найдены, отдаём из кэша
+3. **Cache miss** — идём в БД, результат кладём в Redis с TTL
+4. При обновлении/удалении — инвалидируем ключ
 
-**docker-build** — запускается только после успешного прохождения тестов (`needs: test-and-build`), собирает Docker-образ через multi-stage build.
+Redis не является источником истины — это ускоритель чтения. При его недоступности сервис продолжает работать через БД.
 
 ---
 
-## 3. YAML-файл pipeline
+## 3. Структура кэш-слоя
 
-Файл `.github/workflows/ci.yml`:
-
-```yaml
-name: CI Pipeline
-
-on:
-  push:
-    branches: [ "main", "master" ]
-  pull_request:
-    branches: [ "main", "master" ]
-
-jobs:
-  test-and-build:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.23'
-
-      - name: Show Go version
-        run: go version
-
-      - name: Download dependencies
-        run: go mod download
-
-      - name: Run tests
-        run: go test ./...
-
-      - name: Build tasks service
-        run: go build ./services/tasks/cmd/tasks
-
-      - name: Build auth service
-        run: go build ./services/auth/cmd/auth
-
-  docker-build:
-    runs-on: ubuntu-latest
-    needs: test-and-build
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Docker image
-        run: docker build -t techip-tasks:${{ github.sha }} -f services/tasks/Dockerfile .
+```
+services/tasks/internal/cache/
+  redis.go   — создание клиента и ping
+  keys.go    — формирование ключей
+  ttl.go     — TTL с jitter
 ```
 
-### Пояснение шагов
-
-| Шаг | Назначение |
-|-----|-----------|
-| `actions/checkout@v4` | Клонирует репозиторий в runner |
-| `actions/setup-go@v5` | Устанавливает Go 1.23 |
-| `go mod download` | Загружает зависимости из go.mod |
-| `go test ./...` | Запускает все unit-тесты проекта |
-| `go build ./services/tasks/cmd/tasks` | Компилирует сервис tasks |
-| `go build ./services/auth/cmd/auth` | Компилирует сервис auth |
-| `docker/setup-buildx-action@v3` | Настраивает Docker Buildx |
-| `docker build` | Собирает Docker-образ с multi-stage build |
-
----
-
-## 4. Unit-тесты
-
-Для pipeline созданы unit-тесты бизнес-логики сервиса tasks (`services/tasks/internal/service/task_test.go`). Используется mock-реализация интерфейса `TaskRepository`:
+### Формирование ключей
 
 ```go
-type mockRepo struct {
-    tasks map[string]*Task
+func TaskByIDKey(id string) string {
+    return fmt.Sprintf("tasks:task:%s", id)
 }
 ```
 
-Покрытые сценарии:
+Ключи предсказуемы, уникальны и легко инвалидируются.
 
-| Тест | Что проверяет |
-|------|--------------|
-| `TestCreate` | Создание задачи, генерация ID, начальный статус |
-| `TestGetAll` | Получение списка всех задач |
-| `TestGetByID` | Поиск задачи по ID |
-| `TestGetByID_NotFound` | Ошибка при несуществующем ID |
-| `TestUpdate` | Обновление полей задачи |
-| `TestUpdate_NotFound` | Ошибка при обновлении несуществующей задачи |
-| `TestUpdate_PartialFields` | Частичное обновление (только указанные поля) |
-| `TestDelete` | Удаление задачи |
-| `TestDelete_NotFound` | Ошибка при удалении несуществующей задачи |
-| `TestSearchByTitle` | Поиск задач по заголовку |
+### TTL с jitter
+
+```go
+func TTLWithJitter(base, jitter time.Duration) time.Duration {
+    if jitter <= 0 {
+        return base
+    }
+    extra := time.Duration(rand.Int63n(int64(jitter) + 1))
+    return base + extra
+}
+```
+
+- **TTL** = 120 секунд — время жизни записи в кэше
+- **Jitter** = 0–30 секунд — случайная добавка, предотвращающая одновременное истечение множества ключей (cache stampede)
+
+Итоговый TTL каждой записи: от 120 до 150 секунд.
 
 ---
 
-## 5. Формирование тега Docker-образа
+## 4. Реализация cache-aside в сервисном слое
 
-Тег формируется автоматически на основе SHA коммита:
+Файл `services/tasks/internal/service/task.go`:
 
-```yaml
-docker build -t techip-tasks:${{ github.sha }} .
+```go
+func (s *TaskService) GetByID(ctx context.Context, id string) (*Task, error) {
+    key := cache.TaskByIDKey(id)
+
+    if s.redis != nil {
+        cached, err := s.redis.Get(ctx, key).Result()
+        if err == nil {
+            var t Task
+            if err := json.Unmarshal([]byte(cached), &t); err == nil {
+                s.log.Info("cache hit", zap.String("key", key))
+                return &t, nil
+            }
+        } else if errors.Is(err, redis.Nil) {
+            s.log.Info("cache miss", zap.String("key", key))
+        } else {
+            s.log.Warn("redis read error", zap.String("key", key), zap.Error(err))
+        }
+    }
+
+    task, err := s.repo.GetByID(id)
+    if err != nil {
+        return nil, err
+    }
+
+    if s.redis != nil {
+        bytes, _ := json.Marshal(task)
+        ttl := cache.TTLWithJitter(s.ttl, s.ttlJitter)
+        s.redis.Set(ctx, key, bytes, ttl)
+        s.log.Info("cache set", zap.String("key", key), zap.Duration("ttl", ttl))
+    }
+
+    return task, nil
+}
 ```
 
-Это обеспечивает:
-- **уникальность** — каждый коммит получает свой образ;
-- **трассируемость** — по тегу можно найти точный коммит;
-- **воспроизводимость** — повторная сборка того же коммита даёт тот же тег.
+### Инвалидация кэша
+
+При изменении или удалении задачи кэш инвалидируется:
+
+```go
+func (s *TaskService) invalidateCache(ctx context.Context, id string) {
+    if s.redis == nil {
+        return
+    }
+    key := cache.TaskByIDKey(id)
+    s.redis.Del(ctx, key)
+    s.log.Info("cache invalidated", zap.String("key", key))
+}
+```
+
+Вызывается в `Update()` и `Delete()` после успешного изменения в БД.
 
 ---
 
-## 6. Хранение секретов
+## 5. Подключение Redis
 
-Секреты (токены, пароли, SSH-ключи) хранятся в **GitHub Secrets** (Settings → Secrets and variables → Actions), а не в репозитории.
+### Конфигурация через переменные окружения
 
-Использование в pipeline:
+| Переменная | Значение по умолчанию | Описание |
+|---|---|---|
+| `REDIS_ADDR` | `localhost:6379` | Адрес Redis |
+| `CACHE_TTL` | `120s` | Базовый TTL кэша |
+| `CACHE_TTL_JITTER` | `30s` | Максимальный jitter |
 
-```yaml
-- name: Login to registry
-  run: echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login -u "${{ secrets.REGISTRY_USERNAME }}" --password-stdin ghcr.io
+### Инициализация в main.go
+
+```go
+redisClient = cache.NewRedisClient(redisAddr, "", 2*time.Second, 2*time.Second, 2*time.Second)
+if err := cache.Ping(context.Background(), redisClient); err != nil {
+    log.Warn("redis unavailable at startup, caching disabled", zap.Error(err))
+    redisClient = nil
+} else {
+    log.Info("connected to redis", zap.String("addr", redisAddr))
+}
 ```
 
-Принципы:
-- секреты **не попадают** в репозиторий и не отображаются в логах;
-- передаются как переменные окружения только во время выполнения pipeline;
-- для публикации Docker-образа в registry потребуются `REGISTRY_USERNAME` и `REGISTRY_PASSWORD`.
+Таймауты подключения — 2 секунды. Если Redis недоступен при старте, сервис работает без кэша.
 
 ---
 
-## 7. Публикация образа в registry (опционально)
+## 6. Docker Compose
 
-Для публикации образа в GitHub Container Registry (ghcr.io) job `docker-build` дополняется шагами:
+Redis добавлен в `deploy/docker-compose.yml`:
 
 ```yaml
-- name: Login to GHCR
-  run: echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-
-- name: Build and tag image
-  run: docker build -t ghcr.io/${{ github.repository }}/tasks:${{ github.sha }} -f services/tasks/Dockerfile .
-
-- name: Push image
-  run: docker push ghcr.io/${{ github.repository }}/tasks:${{ github.sha }}
+redis:
+  image: redis:7.4-alpine
+  container_name: tasks_redis
+  ports:
+    - "6379:6379"
+  healthcheck:
+    test: ["CMD", "redis-cli", "ping"]
+    interval: 3s
+    timeout: 3s
+    retries: 10
 ```
 
-После публикации образ можно развернуть на сервере:
+Сервис tasks зависит от Redis:
+
+```yaml
+tasks:
+  environment:
+    REDIS_ADDR: "redis:6379"
+    CACHE_TTL: "120s"
+    CACHE_TTL_JITTER: "30s"
+  depends_on:
+    redis:
+      condition: service_healthy
+```
+
+---
+
+## 7. Деградация при недоступности Redis
+
+Сервис **не падает** при недоступности Redis:
+
+- При старте: если ping не прошёл — `redisClient = nil`, кэширование отключается
+- При работе: ошибки Redis логируются, запрос обслуживается из БД
+- Все проверки `if s.redis != nil` гарантируют, что без Redis сервис работает штатно
+
+---
+
+## 8. Запуск и проверка
+
+### Запуск
 
 ```bash
-docker pull ghcr.io/<owner>/pz1.2/tasks:<tag>
-docker compose up -d
+cd deploy
+docker compose up -d --build
 ```
+
+### Сценарий 1: cache miss → cache set → cache hit
+
+```bash
+# Первый запрос — cache miss, данные из БД
+curl http://localhost:8082/v1/tasks/{id}
+
+# Второй запрос — cache hit, данные из Redis
+curl http://localhost:8082/v1/tasks/{id}
+```
+
+![Cache miss и hit](docs/images/pz9_miss_hit.png)
+
+### Сценарий 2: инвалидация после PATCH
+
+```bash
+curl -X PATCH http://localhost:8082/v1/tasks/{id} \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Updated"}'
+
+# Следующий GET — снова cache miss
+curl http://localhost:8082/v1/tasks/{id}
+```
+
+![Инвалидация после PATCH](docs/images/pz9_invalidate.png)
+
+### Сценарий 3: инвалидация после DELETE
+
+```bash
+curl -X DELETE http://localhost:8082/v1/tasks/{id}
+
+# GET вернёт 404
+curl http://localhost:8082/v1/tasks/{id}
+```
+
+### Сценарий 4: fallback при остановленном Redis
+
+```bash
+docker compose stop redis
+
+# Сервис продолжает отвечать через БД
+curl http://localhost:8082/v1/tasks/{id}
+```
+
+![Fallback без Redis](docs/images/pz9_fallback.png)
 
 ---
 
-## 8. Демонстрация
+## 9. Демонстрация
 
-**Pipeline успешно выполнен:**
+**Прогон Postman-коллекции:**
 
-![CI Pipeline](docs/images/pz8_pipeline.png)
+![Postman результаты](docs/images/pz9_postman.png)

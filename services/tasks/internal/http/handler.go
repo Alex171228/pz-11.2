@@ -123,7 +123,7 @@ func (h *Handler) handleGetByID(w http.ResponseWriter, r *http.Request) {
 	l := logger.FromContext(r.Context()).With(zap.String("component", "handler"))
 	id := r.PathValue("id")
 
-	task, err := h.taskService.GetByID(id)
+	task, err := h.taskService.GetByID(r.Context(), id)
 	if err != nil {
 		l.Warn("task not found", zap.String("task_id", id))
 		h.respondJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
@@ -145,7 +145,7 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := h.taskService.Update(id, req)
+	task, err := h.taskService.Update(r.Context(), id, req)
 	if err != nil {
 		l.Warn("task not found", zap.String("task_id", id))
 		h.respondJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
@@ -160,7 +160,7 @@ func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
 	l := logger.FromContext(r.Context()).With(zap.String("component", "handler"))
 	id := r.PathValue("id")
 
-	if err := h.taskService.Delete(id); err != nil {
+	if err := h.taskService.Delete(r.Context(), id); err != nil {
 		l.Warn("task not found", zap.String("task_id", id))
 		h.respondJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
 		return

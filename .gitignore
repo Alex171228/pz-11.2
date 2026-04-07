@@ -1,4 +1,10 @@
 *.exe
+*.log
+.env
 deploy/tls/certs/
 .idea/
+.vscode/
 pz6-web-security/
+pz4_postman_collection.json
+pz5_postman_collection.json
+pz6_postman_collection.json
