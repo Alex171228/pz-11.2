@@ -25,6 +25,12 @@ func main() {
 	log := logger.New("tasks")
 	defer log.Sync()
 
+	instanceID := os.Getenv("INSTANCE_ID")
+	if instanceID == "" {
+		instanceID = "tasks-default"
+	}
+	log.Info("instance identity", zap.String("instance_id", instanceID))
+
 	port := os.Getenv("TASKS_PORT")
 	if port == "" {
 		port = "8082"
@@ -102,11 +108,12 @@ func main() {
 	taskService := service.NewTaskService(repo, redisClient, log, cacheTTL, cacheTTLJitter)
 
 	mux := http.NewServeMux()
-	handler := taskshttp.NewHandler(taskService, authVerifier, log)
+	handler := taskshttp.NewHandler(taskService, authVerifier, log, instanceID)
 	handler.RegisterRoutes(mux)
 	mux.Handle("GET /metrics", promhttp.Handler())
 
-	httpHandler := middleware.Metrics(middleware.RequestID(middleware.AccessLog(log)(mux)))
+	core := taskshttp.InstanceIDMiddleware(instanceID, mux)
+	httpHandler := middleware.Metrics(middleware.RequestID(middleware.AccessLog(log, zap.String("instance_id", instanceID))(core)))
 
 	server := &http.Server{
 		Addr:         ":" + port,

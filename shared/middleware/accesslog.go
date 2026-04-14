@@ -9,7 +9,9 @@ import (
 	"pz1.2/shared/logger"
 )
 
-func AccessLog(base *zap.Logger) func(http.Handler) http.Handler {
+// AccessLog logs each completed HTTP request. Optional staticFields (e.g. instance_id for load-balanced replicas)
+// are added to the logger and to every "request completed" line.
+func AccessLog(base *zap.Logger, staticFields ...zap.Field) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
@@ -17,7 +19,8 @@ func AccessLog(base *zap.Logger) func(http.Handler) http.Handler {
 			rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 
 			rid := GetRequestID(r.Context())
-			reqLog := base.With(zap.String("request_id", rid))
+			fields := append([]zap.Field{zap.String("request_id", rid)}, staticFields...)
+			reqLog := base.With(fields...)
 			ctx := logger.WithContext(r.Context(), reqLog)
 
 			next.ServeHTTP(rw, r.WithContext(ctx))

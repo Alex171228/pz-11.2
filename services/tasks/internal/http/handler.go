@@ -16,18 +16,24 @@ type Handler struct {
 	taskService  *service.TaskService
 	authVerifier authclient.AuthVerifier
 	log          *zap.Logger
+	instanceID   string
 }
 
-func NewHandler(taskService *service.TaskService, authVerifier authclient.AuthVerifier, log *zap.Logger) *Handler {
+func NewHandler(taskService *service.TaskService, authVerifier authclient.AuthVerifier, log *zap.Logger, instanceID string) *Handler {
+	if instanceID == "" {
+		instanceID = "tasks-default"
+	}
 	return &Handler{
 		taskService:  taskService,
 		authVerifier: authVerifier,
 		log:          log,
+		instanceID:   instanceID,
 	}
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /health", h.handleHealth)
+	mux.HandleFunc("GET /whoami", h.handleWhoami)
 	mux.HandleFunc("POST /v1/tasks", h.authMiddleware(h.handleCreate))
 	mux.HandleFunc("GET /v1/tasks", h.authMiddleware(h.handleGetAll))
 	mux.HandleFunc("GET /v1/tasks/search", h.authMiddleware(h.handleSearch))
@@ -38,8 +44,15 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	h.respondJSON(w, http.StatusOK, map[string]string{
-		"status":  "ok",
-		"service": "tasks",
+		"status":   "ok",
+		"service":  "tasks",
+		"instance": h.instanceID,
+	})
+}
+
+func (h *Handler) handleWhoami(w http.ResponseWriter, r *http.Request) {
+	h.respondJSON(w, http.StatusOK, map[string]string{
+		"instance": h.instanceID,
 	})
 }
 
@@ -167,6 +180,7 @@ func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	l.Info("task deleted", zap.String("task_id", id))
+	w.Header().Set("X-Instance-ID", h.instanceID)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -193,6 +207,7 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) respondJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Instance-ID", h.instanceID)
 	w.WriteHeader(status)
 	if data != nil {
 		json.NewEncoder(w).Encode(data)

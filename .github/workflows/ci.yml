@@ -45,5 +45,14 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Validate NGINX config (PZ10)
+        run: |
+          docker run --rm \
+            --add-host=tasks_1:127.0.0.1 \
+            --add-host=tasks_2:127.0.0.1 \
+            --add-host=tasks_3:127.0.0.1 \
+            -v "${{ github.workspace }}/deploy/lb/nginx.conf:/etc/nginx/nginx.conf:ro" \
+            nginx:1.27-alpine nginx -t
+
       - name: Build Docker image
         run: docker build -t techip-tasks:${{ github.sha }} -f services/tasks/Dockerfile .
