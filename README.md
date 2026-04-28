@@ -145,7 +145,7 @@ query {
 }
 ```
 
-![Список задач](docs/images/pz11_tasks.png)
+<img width="1800" height="533" alt="image" src="https://github.com/user-attachments/assets/db2e8579-6d96-41a9-a471-376d54cef6e8" /> 
 
 ### Получить задачу по ID
 
@@ -168,7 +168,7 @@ query GetTask($id: ID!) {
 }
 ```
 
-![Задача по ID](docs/images/pz11_task_by_id.png)
+<img width="1795" height="786" alt="image" src="https://github.com/user-attachments/assets/3a6cad0d-dab8-460c-8735-aa7108393665" /> 
 
 ### Создать задачу
 
@@ -194,7 +194,8 @@ mutation Create($input: CreateTaskInput!) {
 }
 ```
 
-![Создание задачи](docs/images/pz11_create.png)
+<img width="1806" height="810" alt="image" src="https://github.com/user-attachments/assets/835e962d-2275-4401-a197-2ba534ccf504" /> 
+
 
 ### Обновить задачу
 
@@ -220,7 +221,8 @@ mutation Update($id: ID!, $input: UpdateTaskInput!) {
 }
 ```
 
-![Обновление задачи](docs/images/pz11_update.png)
+<img width="1800" height="823" alt="image" src="https://github.com/user-attachments/assets/f73e06fc-eae9-47af-b72b-0483029c71c5" /> 
+
 
 ### Удалить задачу
 
@@ -238,19 +240,4 @@ mutation Delete($id: ID!) {
 }
 ```
 
-![Удаление задачи](docs/images/pz11_delete.png)
-
----
-
-## 9. CI
-
-В **GitHub Actions** добавлена проверка синтаксиса конфигурации NGINX: `nginx -t` в контейнере с примонтированным `deploy/lb/nginx.conf`. Для прохождения проверки в контейнер добавлены записи `--add-host=tasks_*:127.0.0.1`. Без реального upstream NGINX не резолвит имена при `nginx -t`.
-
-Локально:
-
-```bash
-docker run --rm \
-  --add-host=tasks_1:127.0.0.1 --add-host=tasks_2:127.0.0.1 --add-host=tasks_3:127.0.0.1 \
-  -v "$(pwd)/deploy/lb/nginx.conf:/etc/nginx/nginx.conf:ro" \
-  nginx:1.27-alpine nginx -t
-```
+<img width="1787" height="773" alt="image" src="https://github.com/user-attachments/assets/23782557-1dcf-4e87-8a95-7ba0daaa46ce" /> 
