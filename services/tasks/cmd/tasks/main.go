@@ -118,7 +118,7 @@ func main() {
 	gqlSrv := gqlhandler.NewDefaultServer(graph.NewExecutableSchema(graph.Config{
 		Resolvers: &graph.Resolver{TaskService: taskService},
 	}))
-	mux.Handle("POST /query", gqlSrv)
+	mux.Handle("POST /query", taskshttp.AuthMiddlewareFunc(authVerifier, log, gqlSrv))
 	mux.Handle("GET /", playground.Handler("GraphQL Playground", "/query"))
 	log.Info("GraphQL playground available at /")
 
